@@ -1,0 +1,8 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Datasets, extracted features, recordings, trained models and reports: never versioned
+data/
+collection/sessions/
