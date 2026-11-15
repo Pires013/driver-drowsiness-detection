@@ -1,18 +1,7 @@
-"""
-Sanity check das features extraídas: compara, para cada participante, os vídeos alerta (0),
-baixa vigilância (5) e sonolento (10).
+"""Sanity check of the extracted features: compares each participant's alert (0), low-vigilance (5) and drowsy (10) videos.
 
-Por vídeo calcula: EAR médio, PERCLOS, piscadas/min, bocejos, pitch médio, frames com EAR
-exatamente 0, distribuição do MAR e instabilidade de pitch/yaw. Gera resumo.csv,
-comparacao_0_vs_10.csv, bocejos.csv e os gráficos em data/sanity_check/.
-
-Todos os limiares são RELATIVOS ao próprio vídeo (parâmetros em detection/parameters.py),
-porque resolução, câmera, iluminação e rosto mudam entre vídeos.
-
-Uso (da raiz do projeto):
-    python -m pipeline.sanity_check [--fold Fold1] [--features data/features] [--out data/sanity_check]
-Sem --fold lê todos os folds de --features (<features>/<FoldN>/<participante>/<rótulo>.csv).
-"""
+All thresholds are RELATIVE to each video (see detection/parameters.py), since resolution, camera, lighting and face change between videos.
+Writes resumo.csv, comparacao_0_vs_10.csv, bocejos.csv and the plots to data/sanity_check/."""
 import argparse
 from pathlib import Path
 
@@ -24,33 +13,25 @@ from detection.calibration import ear_threshold, mar_threshold, pitch_drop_thres
 from detection.validity import is_valid_frame
 from pipeline.sanity_plots import plot_comparison, plot_ear_timeseries, plot_mar_distribution
 
-# Direção esperada do vídeo sonolento em relação ao alerta (None = sem expectativa clara)
+# expected direction of the drowsy video relative to the alert one (None = no clear expectation)
 EXPECTED_DIRECTION = {"mean_ear": -1, "perclos_pct": +1, "blinks_per_min": None, "yawns": +1,
                       "mean_pitch": None, "long_closures": +1, "head_nods_per_min": +1,
                       "pct_head_down": +1, "pitch_std": +1, "pitch_p5_minus_median": -1}
 
 
-# ----------------------------------------------------------------------
-# Sequências contínuas
-# ----------------------------------------------------------------------
 def find_runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(início, fim) em posições de linha de cada sequência contínua de True. Frame inválido
-    tem mask=False, então quebra a sequência (não conta como olho fechado)."""
     mask = np.asarray(mask, dtype=bool)
     if not mask.any():
         return np.array([], dtype=int), np.array([], dtype=int)
+    # invalid frames have mask=False, so they break a run (they do not count as closed eye)
     edges = np.diff(np.concatenate([[0], mask.astype(np.int8), [0]]))
     return np.where(edges == 1)[0], np.where(edges == -1)[0] - 1
 
 
 def bridge_invalid_gaps(mask: np.ndarray, valid: np.ndarray, timestamps: np.ndarray,
                         frame_dt: float) -> np.ndarray:
-    """Cópia de mask com True nos buracos de frames INVÁLIDOS de até BRIDGE_MAX_GAP_S entre dois True.
-
-    Só para detectar eventos (piscada, fechamento longo, bocejo): um frame inválido no meio do
-    evento não deve parti-lo em dois. Frame válido com mask False (olho aberto de fato) nunca é
-    ponteado, e as porcentagens (PERCLOS etc.) continuam usando a máscara original.
-    """
+    # for event detection only: an invalid gap inside an event must not split it
+    # valid open-eye frames are never bridged, and percentages keep the original mask
     bridged = np.asarray(mask, dtype=bool).copy()
     starts, ends = find_runs(~np.asarray(valid, dtype=bool))
     for start, end in zip(starts, ends):
@@ -63,19 +44,14 @@ def bridge_invalid_gaps(mask: np.ndarray, valid: np.ndarray, timestamps: np.ndar
 
 
 def run_durations(mask: np.ndarray, timestamps: np.ndarray, frame_dt: float) -> np.ndarray:
-    """Duração (s) de cada sequência contínua de True."""
     starts, ends = find_runs(mask)
     return timestamps[ends] - timestamps[starts] + frame_dt
 
 
-# ----------------------------------------------------------------------
-# Métricas por assunto (cada uma devolve um dict; a ordem das chaves define as colunas do resumo)
-# ----------------------------------------------------------------------
 def ear_metrics(data: pd.DataFrame, valid: np.ndarray, timestamps: np.ndarray, frame_dt: float) -> dict:
-    """EAR médio, PERCLOS (referência: olho aberto do próprio vídeo), piscadas e fechamentos longos."""
     ear = data["ear_mean"].to_numpy()
     open_eye_ear = reference_from_percentile(ear, P.OPEN_EYE_PERCENTILE)
-    closing = ear < ear_threshold(open_eye_ear)             # NaN < x é False
+    closing = ear < ear_threshold(open_eye_ear)  # NaN < x is False
     durations = run_durations(bridge_invalid_gaps(closing, valid, timestamps, frame_dt), timestamps, frame_dt)
     blinks = int(((durations >= P.BLINK_MIN_S) & (durations < P.BLINK_MAX_S)).sum())
     valid_minutes = valid.sum() * frame_dt / P.SECONDS_PER_MINUTE
@@ -91,14 +67,9 @@ def ear_metrics(data: pd.DataFrame, valid: np.ndarray, timestamps: np.ndarray, f
 
 
 def zero_ear_metrics(valid_rows: pd.DataFrame) -> dict:
-    """Frames com EAR exatamente 0 e sua origem provável.
-
-    O CSV tem 6 casas decimais, então "0.000000" = zero exato do cálculo (ou < 5e-7).
-    A trava de divisão por zero (horizontal == 0) só dispara se os DOIS cantos do olho caírem no
-    mesmo pixel: só acontece com malha facial colapsada, e nesse caso o MAR (que também tem
-    trava) vem 0 junto. Zero isolado, com MAR normal, é o outro caso: numerador 0 (as duas
-    distâncias verticais viram 0 px por truncamento int()).
-    """
+    # the CSV has 6 decimals, so 0.000000 is an exact zero
+    # the divide-by-zero guard (horizontal == 0) only fires with a collapsed mesh, where MAR is 0 too
+    # an isolated zero with normal MAR means a zero numerator (int() truncation of both vertical distances)
     zero_left, zero_right, zero_mean = (valid_rows[c] == 0 for c in ("ear_left", "ear_right", "ear_mean"))
     zero_eye = zero_left | zero_right
     with_zero_mar = int((zero_eye & (valid_rows["mar"] == 0)).sum())
@@ -113,11 +84,10 @@ def zero_ear_metrics(valid_rows: pd.DataFrame) -> dict:
 
 def mar_metrics(data: pd.DataFrame, valid: np.ndarray, timestamps: np.ndarray, frame_dt: float,
                 video_id: dict) -> tuple[dict, list]:
-    """Distribuição do MAR e bocejos (MAR acima de um múltiplo do MAR de repouso por tempo mínimo)."""
     mar = data["mar"].to_numpy()
     metrics = {f"mar_p{p}": reference_from_percentile(mar, p) for p in P.MAR_PERCENTILES}
     metrics["mar_max"] = float(np.nanmax(mar))
-    rest = reference_from_percentile(mar, P.MAR_REST_PERCENTILE)   # mediana = boca fechada a maior parte do tempo
+    rest = reference_from_percentile(mar, P.MAR_REST_PERCENTILE)  # median = mouth closed most of the time
     threshold = mar_threshold(rest)
     above = mar > threshold
     metrics["mar_yawn_threshold"] = threshold
@@ -138,22 +108,16 @@ def mar_metrics(data: pd.DataFrame, valid: np.ndarray, timestamps: np.ndarray, f
 
 
 def smooth_pitch(pitch: np.ndarray, valid: np.ndarray, frame_dt: float) -> np.ndarray:
-    """Mediana móvel centrada (PITCH_SMOOTH_S) do pitch; frame inválido continua NaN."""
-    window = max(1, round(P.PITCH_SMOOTH_S / frame_dt)) | 1          # nº ímpar de frames
+    window = max(1, round(P.PITCH_SMOOTH_S / frame_dt)) | 1  # odd number of frames
     smooth = pd.Series(pitch).rolling(window, center=True, min_periods=1).median().to_numpy()
     return np.where(valid, smooth, np.nan)
 
 
 def head_pose_events(pitch: np.ndarray, valid: np.ndarray, timestamps: np.ndarray,
                      frame_dt: float) -> dict:
-    """Cabeceios e dispersão do pitch, sobre o pitch suavizado dos frames válidos.
-
-    Neutro = mediana do próprio vídeo; cabeça baixa = pitch abaixo de neutro + PITCH_DROP_OFFSET_DEG.
-    Cabeceio = cabeça baixa por >= HEAD_NOD_MIN_S (com a ponte de buracos inválidos).
-    """
     smooth = smooth_pitch(pitch, valid, frame_dt)
     neutral = reference_from_percentile(smooth, P.HEAD_NEUTRAL_PERCENTILE)
-    head_down = smooth < pitch_drop_threshold(neutral)                # NaN < x é False
+    head_down = smooth < pitch_drop_threshold(neutral)  # NaN < x is False
     durations = run_durations(bridge_invalid_gaps(head_down, valid, timestamps, frame_dt),
                               timestamps, frame_dt)
     nods = int((durations >= P.HEAD_NOD_MIN_S).sum())
@@ -168,11 +132,7 @@ def head_pose_events(pitch: np.ndarray, valid: np.ndarray, timestamps: np.ndarra
 
 
 def head_metrics(raw: pd.DataFrame, face_ok: np.ndarray, valid_rows: pd.DataFrame) -> dict:
-    """Pitch/yaw médios (frames válidos) e instabilidade do solvePnP.
-
-    Salto entre frames CONSECUTIVOS (índice consecutivo e rosto nos dois). Só mede, e mede no
-    dado CRU (sem o filtro de validade): o objetivo é quantificar a instabilidade.
-    """
+    # measured on RAW data (no validity filter) on purpose: the goal is to quantify solvePnP instability
     consecutive = (raw["frame_idx"].diff().to_numpy() == 1) & face_ok & np.roll(face_ok, 1)
     consecutive[0] = False
     pitch_jump = np.abs(raw["pitch"].diff().to_numpy())[consecutive] > P.JUMP_DEG
@@ -187,16 +147,12 @@ def head_metrics(raw: pd.DataFrame, face_ok: np.ndarray, valid_rows: pd.DataFram
     }
 
 
-# ----------------------------------------------------------------------
-# Um vídeo
-# ----------------------------------------------------------------------
 def analyze_video(csv_path: Path, apply_filter: bool = True) -> tuple[dict, pd.DataFrame, list]:
-    """(resumo, dados com frames inválidos em NaN, bocejos) de um CSV de features."""
     data = pd.read_csv(csv_path, dtype={"participant": str})
     timestamps = data["timestamp_s"].to_numpy()
     frame_dt = float(np.median(np.diff(timestamps)))
     face_ok = data["face_detected"].to_numpy() == P.FACE_FOUND
-    raw = data[["frame_idx", "pitch", "yaw"]].copy()    # a instabilidade do solvePnP se mede no dado cru
+    raw = data[["frame_idx", "pitch", "yaw"]].copy()  # solvePnP instability is measured on raw data
 
     if apply_filter:
         valid = is_valid_frame(data["face_detected"].to_numpy(), data["yaw"].to_numpy(),
@@ -204,7 +160,7 @@ def analyze_video(csv_path: Path, apply_filter: bool = True) -> tuple[dict, pd.D
                                data["ear_right"].to_numpy())
     else:
         valid = face_ok
-    data.loc[~valid, P.FEATURE_COLUMNS] = np.nan        # só na memória; o CSV em disco não muda
+    data.loc[~valid, P.FEATURE_COLUMNS] = np.nan  # in memory only; the CSV on disk is unchanged
     valid_rows = data[valid]
 
     video_id = {"participant": data["participant"].iloc[0], "label": int(data["label"].iloc[0])}
@@ -224,24 +180,17 @@ def analyze_video(csv_path: Path, apply_filter: bool = True) -> tuple[dict, pd.D
     return summary, data, yawns
 
 
-# ----------------------------------------------------------------------
-# Tabelas e relatório
-# ----------------------------------------------------------------------
 def add_alert_reference_perclos(table: pd.DataFrame, data: dict) -> None:
-    """Coluna extra: PERCLOS com o EAR 'aberto' do vídeo ALERTA do mesmo participante como referência.
-
-    Se o vídeo sonolento já tem olho meio fechado o tempo todo, o EAR aberto dele próprio é baixo e
-    o PERCLOS relativo ao próprio vídeo SUBESTIMA a sonolência; esta coluna expõe isso.
-    """
+    # PERCLOS using the same participant's ALERT video as the open-eye reference
+    # a drowsy video with half-closed eyes all along has a low own open-eye EAR, so self-relative PERCLOS underestimates it
     reference = table[table.label == P.ALERT_LABEL].set_index("participant")["open_eye_ear"]
     table["perclos_alert_ref_pct"] = [
-        P.PERCENT * (data[(row.participant, row.label)]["ear_mean"].dropna()     # só frames válidos
+        P.PERCENT * (data[(row.participant, row.label)]["ear_mean"].dropna()  # valid frames only
                      < ear_threshold(reference[row.participant])).mean()
         if row.participant in reference.index else np.nan for row in table.itertuples()]
 
 
 def add_resolution(table: pd.DataFrame, log_path: Path) -> None:
-    """Colunas width/height (já com a rotação aplicada) lidas do log da extração."""
     if not log_path.exists():
         table["width"] = table["height"] = np.nan
         return
@@ -253,7 +202,6 @@ def add_resolution(table: pd.DataFrame, log_path: Path) -> None:
 
 
 def fps_mismatch(table: pd.DataFrame) -> dict:
-    """{participante: menor/maior fps} dos vídeos 0 e 10, para quem fica abaixo de FPS_MISMATCH_RATIO."""
     flagged = {}
     for participant, group in table.groupby("participant"):
         fps = group[group.label.isin([P.ALERT_LABEL, P.DROWSY_LABEL])]["fps"]
@@ -263,7 +211,6 @@ def fps_mismatch(table: pd.DataFrame) -> dict:
 
 
 def compare_alert_vs_drowsy(table: pd.DataFrame) -> pd.DataFrame:
-    """Diferença (sonolento - alerta) de cada métrica esperada, por participante."""
     rows = []
     for participant, group in table.groupby("participant"):
         alert, drowsy = group[group.label == P.ALERT_LABEL], group[group.label == P.DROWSY_LABEL]
@@ -274,7 +221,6 @@ def compare_alert_vs_drowsy(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def stage_table(table: pd.DataFrame) -> pd.DataFrame:
-    """Uma linha por participante com as 3 etapas (0, 5, 10) de cada métrica esperada."""
     labels = (P.ALERT_LABEL, P.LOW_VIGILANCE_LABEL, P.DROWSY_LABEL)
     rows = []
     for participant, group in table.groupby("participant"):
@@ -287,7 +233,6 @@ def stage_table(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def print_stages(stages: pd.DataFrame) -> None:
-    """Em qual etapa cada sinal aparece: média por etapa e participantes na direção esperada."""
     alert, low, drowsy = P.ALERT_LABEL, P.LOW_VIGILANCE_LABEL, P.DROWSY_LABEL
     print(f"\n=== Etapas 0 / 5 / 10 ({len(stages)} participantes com os 3 vídeos) ===")
     rows = []

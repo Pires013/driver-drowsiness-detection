@@ -1,11 +1,9 @@
-"""Reamostragem a 10 Hz, referência (calibração) e montagem da janela da rede.
+"""Resampling to 10 Hz, per-person reference and network window assembly.
 
-Código ÚNICO do treino (training/prepare_data.py) e da demonstração ao vivo (demos/main_demo.py):
-os dois tratam os dados do mesmo jeito.
-
-Por vídeo/sessão: frame inválido (detection/validity.py) vira falta -> média dos frames válidos de
-cada intervalo de 0,1 s (e EAR mínimo do intervalo) -> buraco de até 0,3 s interpolado, maior fica
-como falta -> medida relativa à referência da pessoa (EAR e MAR em razão, pose em diferença).
+Single code path shared by training (training/prepare_data.py) and the live demo (demos/main_demo.py).
+Per video/session: invalid frames become gaps -> mean of valid frames per 0.1 s step (plus the step's
+minimum EAR) -> gaps up to 0.3 s interpolated, longer ones stay missing -> values relative to the
+person's reference (EAR and MAR as ratios, pose as differences).
 """
 import numpy as np
 
@@ -15,12 +13,11 @@ from detection.calibration import reference_from_percentile
 
 def resample(t: np.ndarray, values: np.ndarray, valid: np.ndarray, n_measures: int = P.N_MEASURES_BASE + 1,
              first_step: int = 0, n_steps: int | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Série a 10 Hz (n_steps, n_measures), NaN nas faltas, e a máscara de passos observados.
+    """Resample to 10 Hz: returns (series (n_steps, n_measures) with NaN gaps, observed-step mask).
 
-    t: instantes (s); values: (N, 5) = EAR médio, MAR, pitch, yaw, roll; valid: máscara de frames
-    válidos. Canais 0-4 = média do intervalo de 0,1 s; canal 5 (se n_measures > 5) = EAR mínimo do
-    intervalo (uma piscada de 2 frames quase some na média). `first_step` e `n_steps` recortam um
-    trecho (uso ao vivo); o passo k cobre [k*0,1 s, (k+1)*0,1 s).
+    values is (N, 5) = mean EAR, MAR, pitch, yaw, roll. Channels 0-4 are the mean per 0.1 s step;
+    channel 5 (if n_measures > 5) is the step's minimum EAR, since a 2-frame blink nearly vanishes
+    in the mean. first_step/n_steps crop a segment (live use).
     """
     t = np.clip(np.asarray(t, dtype=float), 0, None)
     steps = (t / P.STEP_S).astype(int)
@@ -43,7 +40,7 @@ def resample(t: np.ndarray, values: np.ndarray, valid: np.ndarray, n_measures: i
         np.minimum.at(ear_min, bins[inside], values[inside, 0])
         series[observed, P.EAR_MIN_CHANNEL] = ear_min[observed]
 
-    # Interpola só os buracos de até MAX_INTERP_GAP_STEPS passos entre dois passos observados
+    # interpolate only gaps up to MAX_INTERP_GAP_STEPS between two observed steps
     idx = np.flatnonzero(observed)
     for a, b in zip(idx[:-1], idx[1:]):
         gap = b - a - 1
@@ -54,7 +51,7 @@ def resample(t: np.ndarray, values: np.ndarray, valid: np.ndarray, n_measures: i
 
 
 def reference_of(series: np.ndarray) -> np.ndarray | None:
-    """[EAR p75, MAR mediana, pitch, yaw, roll medianas] dos passos observados; None se não há."""
+    """Reference [EAR p75, MAR median, pitch/yaw/roll medians] over observed steps; None if there are none."""
     if np.isnan(series[:, 0]).all():
         return None
     return np.array([
@@ -64,13 +61,12 @@ def reference_of(series: np.ndarray) -> np.ndarray | None:
 
 
 def wrap_deg(angle):
-    """Leva um ângulo (ou diferença de ângulos) em graus para [-180, 180): 177 - (-177) = 354 vira -6."""
+    """Wrap an angle (or angle difference) in degrees to [-180, 180): 177 - (-177) = 354 becomes -6."""
     return (np.asarray(angle, dtype=float) + 180.0) % 360.0 - 180.0
 
 
 def relative(series: np.ndarray, ref: np.ndarray) -> np.ndarray:
-    """EAR (e EAR mínimo) e MAR como razão da referência; pitch, yaw e roll como diferença (graus),
-    sempre em [-180, 180) (a diferença "dá a volta" em vez de passar de 180)."""
+    """EAR (and minimum EAR) and MAR as ratios of the reference; pitch/yaw/roll as wrapped differences in degrees."""
     out = series.copy()
     out[:, 0] /= ref[0]
     out[:, 1] /= ref[1]
@@ -81,15 +77,15 @@ def relative(series: np.ndarray, ref: np.ndarray) -> np.ndarray:
 
 
 def window_ok(window: np.ndarray) -> bool:
-    """A janela tem observação suficiente (>= 50% dos passos com EAR)?"""
+    """True if enough steps have an EAR reading (MIN_OBSERVED_FRACTION)."""
     return bool(np.isfinite(window[:, 0]).mean() >= P.MIN_OBSERVED_FRACTION)
 
 
 class LiveBuffer:
-    """Guarda os frames recentes de uma sessão ao vivo e monta a janela relativa dos últimos 60 s.
+    """Keeps recent frames of a live session and builds the relative window of the last 60 s.
 
-    Os instantes são contados desde o início da sessão (ou da última recalibração). Os primeiros
-    `calibration_s` segundos formam a referência; a janela da rede só usa passos DEPOIS deles.
+    Times count from session start (or the last recalibration). The first `calibration_s` seconds
+    form the reference; the network window only uses steps AFTER them.
     """
 
     def __init__(self, calibration_s: float = P.LIVE_CALIBRATION_S, n_measures: int = P.N_MEASURES_BASE + 1):
@@ -99,7 +95,7 @@ class LiveBuffer:
 
     def reset(self) -> None:
         self.t: list[float] = []
-        self.values: list[list[float]] = []      # EAR médio, MAR, pitch, yaw, roll (NaN sem rosto)
+        self.values: list[list[float]] = []
         self.valid: list[bool] = []
         self.ref: np.ndarray | None = None
         self.calibration_failed = False
@@ -108,7 +104,7 @@ class LiveBuffer:
         self.t.append(t)
         self.values.append(values)
         self.valid.append(valid)
-        keep_from = t - (P.WINDOW_S + 10)        # só os últimos 70 s ficam (depois da calibração)
+        keep_from = t - (P.WINDOW_S + 10)        # keep only the last 70 s once calibrated
         if self.ref is not None and self.t[0] < keep_from:
             n = int(np.searchsorted(self.t, keep_from))
             del self.t[:n], self.values[:n], self.valid[:n]
@@ -118,7 +114,7 @@ class LiveBuffer:
         return self.ref is not None
 
     def try_calibrate(self, now: float) -> bool:
-        """Fixa a referência quando passaram `calibration_s` s; None se faltou dado (recomeça)."""
+        """Fix the reference once `calibration_s` has elapsed; flags failure (restart) if there is too little data."""
         if self.ref is not None:
             return True
         if now < self.calibration_s:
@@ -135,11 +131,10 @@ class LiveBuffer:
         return self.ref is not None
 
     def window(self, now: float) -> tuple[np.ndarray | None, int]:
-        """(janela (600, n_measures) relativa, passos observados) dos últimos 60 s; None se ainda não
-        há 60 s depois da calibração ou se a janela tem pouca observação."""
+        """Return (relative window of the last 60 s, observed steps); window is None before 60 s of post-calibration data or if too sparse."""
         if self.ref is None or now - self.calibration_s < P.WINDOW_S:
             return None, 0
-        end_step = int(now / P.STEP_S)           # passo atual (incompleto) não entra
+        end_step = int(now / P.STEP_S)           # the current (incomplete) step is excluded
         first_step = end_step - P.WINDOW_STEPS
         t = np.array(self.t)
         use = t >= first_step * P.STEP_S - 1.0

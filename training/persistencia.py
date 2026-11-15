@@ -1,14 +1,6 @@
-"""Persistência e histerese para os níveis da rede no demo (escolha de N e dos limites).
+"""Persistence and hysteresis for the demo's network levels (choice of N and thresholds).
 
-Uso (da raiz, depois de treinar o ciclo 5 com a rede escolhida):
-    python -m training.persistencia probs lstm|gru     # previsões fora do fold, uma por segundo
-    python -m training.persistencia grade lstm|gru     # busca dos parâmetros e tabela de resultados
-
-As previsões imitam o demo: referência dos primeiros 10 s do vídeo, janela de 60 s que só começa depois
-da calibração, uma saída por segundo, feita pelo modelo do fold em que a pessoa NÃO entrou no
-treino (semente 0). A escolha dos parâmetros usa só os vídeos 0 e 10 das pessoas fora do 44 e dos 6
-participantes do teste do demo (04, 08, 13, 25, 37, 50); estes ficam para a comparação antes/depois.
-"""
+Usage: python -m training.persistencia probs|grade lstm|gru (after training cycle 5)."""
 import itertools
 import sys
 
@@ -24,13 +16,13 @@ from training import models as M
 from training.prepare_data import resample_video
 
 CYCLE = 5
-DEMO_PERSONS = ["04", "08", "13", "25", "37", "50"]
+DEMO_PERSONS = ["04", "08", "13", "25", "37", "50"]  # held out for the before/after comparison
 OUT_DIR = C.TRAINING_DIR / "persistencia"
-FIRST_OUTPUT_S = P.LIVE_CALIBRATION_S + P.WINDOW_S      # a rede só responde com 60 s depois da calibração
+FIRST_OUTPUT_S = P.LIVE_CALIBRATION_S + P.WINDOW_S  # the network only answers 60 s after calibration
 ENTER = [0.5, 0.6, 0.7, 0.8, 0.9]
-GAP = [0.1, 0.2, 0.3]                                    # saída = entrada - gap
+GAP = [0.1, 0.2, 0.3]  # exit threshold = enter - gap
 PERSIST_S = [0, 5, 10, 20, 30, 60]
-MAX_ALERT_VIDEOS_PCT = 5.0                               # meta: vídeos alerta <= 5% do tempo em Alerta
+MAX_ALERT_VIDEOS_PCT = 5.0  # goal: alert videos spend <= 5% of the time in Alert
 
 
 def probs_path(kind: str):
@@ -38,7 +30,6 @@ def probs_path(kind: str):
 
 
 def compute_probs(kind: str) -> None:
-    """Probabilidade de sonolento a cada 1 s, de cada vídeo 0 e 10, pelo modelo do fold da pessoa."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     models = {}
     for k in range(1, C.N_FOLDS + 1):
@@ -73,7 +64,6 @@ def compute_probs(kind: str) -> None:
 
 
 def simulate(probs: np.ndarray, enter: float, exit_: float, persist_s: float) -> np.ndarray:
-    """Estado (bool) do portão de Alerta a cada segundo."""
     gate = NetworkGate(enter, exit_, persist_s)
     return np.array([gate.update(float(i), None if np.isnan(p) else float(p)) for i, p in enumerate(probs)])
 
@@ -84,7 +74,6 @@ def load_probs(kind: str) -> dict:
 
 
 def video_stats(probs: dict, persons, params) -> dict:
-    """% do tempo em Alerta (só pela rede) de cada classe e % de vídeos com mais de 10% do tempo em Alerta."""
     res = {0: [], 10: []}
     for key, p in probs.items():
         person, label = key.split("_")
@@ -108,7 +97,6 @@ def grid(kind: str) -> pd.DataFrame:
 
 
 def choose(table: pd.DataFrame) -> pd.Series:
-    """Entre as combinações com vídeos alerta <= 5% do tempo em Alerta, a que mais mantém dos sonolentos."""
     ok = table[table.alerta_t <= MAX_ALERT_VIDEOS_PCT]
     return (ok if len(ok) else table).sort_values(["sonolento_t", "alerta_t"], ascending=[False, True]).iloc[0]
 

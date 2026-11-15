@@ -1,8 +1,6 @@
-"""Demo de webcam do MAR (bocejo) com calibração dinâmica. Rodar: python -m demos.mar_webcam (q sai).
+"""Webcam MAR (yawn) demo with dynamic calibration (q quits).
 
-Nos primeiros frames o usuário mantém a boca fechada: a média vira o MAR de repouso e o limiar
-de bocejo é um múltiplo dele.
-"""
+The mean MAR of the first frames (mouth closed) is the resting reference; the yawn threshold is a multiple of it."""
 from detection import parameters as P
 from detection.calibration import mar_threshold, reference_from_first_frames
 from detection.drawing import draw_points, put_text
@@ -20,7 +18,6 @@ def new_state() -> dict:
 
 
 def calibrate(state: dict, mar: float) -> None:
-    """Acumula o MAR de repouso e, ao juntar frames suficientes, fixa o limiar."""
     state["calibration_values"].append(mar)
     if len(state["calibration_values"]) >= P.CALIBRATION_FRAMES:
         rest = reference_from_first_frames(state["calibration_values"])
@@ -30,7 +27,6 @@ def calibrate(state: dict, mar: float) -> None:
 
 
 def update_yawn_frames(state: dict, mar: float) -> None:
-    """Conta frames seguidos acima do limiar; fala e sorriso rápidos zeram o contador."""
     state["yawn_frames"] = state["yawn_frames"] + 1 if mar > state["threshold"] else 0
 
 

@@ -24,7 +24,6 @@ from pipeline.extract_features import ROTATIONS, open_video, parse_video_path
 
 
 def crop_around_face(image, face_landmarks: FaceLandmarks):
-    """Recorte quadrado em torno do rosto, com margem."""
     height, width = image.shape[:2]
     xs = [lm.x * width for lm in face_landmarks.landmark]
     ys = [lm.y * height for lm in face_landmarks.landmark]
@@ -44,7 +43,6 @@ def caption_lines(frame_idx: int, timestamp_s: float, features: dict | None, csv
 
 
 def draw_tile(frame, face_landmarks: FaceLandmarks | None, lines: list[str]):
-    """Recorte do rosto com landmarks (ou o centro do frame, sem rosto) e a legenda embaixo."""
     image = frame.copy()
     if face_landmarks is None:
         height, width = image.shape[:2]
@@ -65,7 +63,6 @@ def draw_tile(frame, face_landmarks: FaceLandmarks | None, lines: list[str]):
 
 
 def contact_sheet(tiles: list, columns: int):
-    """Junta os tiles em grade; completa a última linha com tiles pretos."""
     tiles = list(tiles)
     while len(tiles) % columns:
         tiles.append(np.zeros_like(tiles[0]))
@@ -102,7 +99,7 @@ def main() -> None:
             break
         if rotation:
             frame = cv2.rotate(frame, ROTATIONS[rotation])
-        face_landmarks = detect_face(face_mesh, frame)      # roda em TODOS os frames: tracking
+        face_landmarks = detect_face(face_mesh, frame)  # runs on EVERY frame: tracking makes each result depend on the previous ones
         if frame_idx in targets:
             height, width = frame.shape[:2]
             features = compute_features(face_landmarks, width, height) if face_landmarks is not None else None

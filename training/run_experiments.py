@@ -1,14 +1,14 @@
-"""Roda os experimentos (validação cruzada nos 5 folds oficiais) com os modelos de cada ciclo.
+"""Runs the experiments (cross-validation on the 5 official folds) with each cycle's models.
 
-Uso (da raiz):
-    python -m training.run_experiments                       # ciclo 1: A, B, C, D e o modelo final
-    python -m training.run_experiments --cycle 2             # ciclo 2: A e B, LSTM e GRU x 5 sementes
-    python -m training.run_experiments --cycle 3             # ciclo 3: como o 2, com 26 e 45 de volta
-    python -m training.run_experiments --cycle 2 --exp A     # só alguns experimentos
-    python -m training.run_experiments --benchmark           # mede o tempo de uma época e sai
+Usage (from the root):
+    python -m training.run_experiments                       # cycle 1: A, B, C, D and the final model
+    python -m training.run_experiments --cycle 2             # cycle 2: A and B, LSTM and GRU x 5 seeds
+    python -m training.run_experiments --cycle 3             # cycle 3: like 2, with 26 and 45 back
+    python -m training.run_experiments --cycle 2 --exp A     # only some experiments
+    python -m training.run_experiments --benchmark           # time one epoch and exit
 
-Cada (experimento, fold, modelo[, semente]) grava as probabilidades em results/ e é pulado se já
-existir, então dá para retomar uma rodada interrompida. O relatório sai de training.report.
+Each (experiment, fold, model[, seed]) saves its probabilities in results/ and is skipped if it
+already exists, so an interrupted run can be resumed. The report comes from training.report.
 """
 import argparse
 import json
@@ -23,7 +23,7 @@ from training.report import evaluate, write_report
 
 
 def load_experiment(key: str, cycle: int = 1) -> dict:
-    """Janelas do experimento: filtra as classes e as pessoas excluídas e remapeia os rótulos."""
+    """Windows of an experiment: filters classes and excluded people, and remaps the labels."""
     spec = C.experiments(cycle)[key]
     data = np.load(C.cycle_dir(cycle) / f"windows_{spec['calibration']}.npz")
     keep = np.isin(data["y"], spec["labels"]) & ~np.isin(data["person"], spec["exclude"])
@@ -34,12 +34,13 @@ def load_experiment(key: str, cycle: int = 1) -> dict:
 
 
 def result_path(cycle: int, key: str, model: str, fold: str, seed: int | None = None):
+    """Path of the saved predictions for one (experiment, model, fold[, seed])."""
     suffix = "" if seed is None else f"_s{seed}"
     return C.results_dir(cycle) / f"{key}_{model}_{fold}{suffix}.npz"
 
 
 def inner_split(train_persons: np.ndarray, seed: int) -> np.ndarray:
-    """Pessoas de treino separadas para a parada antecipada (a rede não treina com elas)."""
+    """Training people held out for early stopping (the network does not train on them)."""
     persons = np.unique(train_persons)
     rng = np.random.RandomState(seed)
     return rng.choice(persons, size=max(1, round(C.INNER_VAL_FRACTION * len(persons))), replace=False)
@@ -47,13 +48,13 @@ def inner_split(train_persons: np.ndarray, seed: int) -> np.ndarray:
 
 def run_fold(cycle: int, key: str, exp: dict, fold: str, stats: np.ndarray, log, only_models=None,
              shuffle_labels: bool = False, tag: str = "", n_seeds: int | None = None) -> None:
-    """Treina nos outros 4 folds e prevê o fold de teste, para cada modelo (e semente)."""
+    """Train on the other 4 folds and predict the test fold, for each model (and seed)."""
     test = exp["fold"] == fold
     train = ~test
-    # Uma pessoa nunca está em treino e teste ao mesmo tempo (os folds oficiais separam pessoas)
+    # a person is never in both train and test (the official folds split by person)
     assert not set(exp["person"][train]) & set(exp["person"][test]), "pessoa em treino e teste"
     y_train = exp["y"][train].copy()
-    if shuffle_labels:    # controle de vazamento: rótulos sorteados por vídeo no treino
+    if shuffle_labels:    # leakage control: random labels per video in training
         rng = np.random.RandomState(C.SEED)
         videos = sorted({(p, l) for p, l in zip(exp["person"][train], exp["label"][train])})
         new = {v: rng.randint(exp["n_classes"]) for v in videos}
@@ -83,8 +84,8 @@ def run_fold(cycle: int, key: str, exp: dict, fold: str, stats: np.ndarray, log,
         save("random_forest", forest.predict_proba(stats[test]),
              extra={"importances": dict(zip(M.STAT_NAMES, forest.feature_importances_.round(4).tolist()))})
 
-    # Redes: a divisão de validação é a mesma em todas as sementes do fold (muda só o sorteio
-    # dos pesos iniciais e a ordem dos lotes)
+    # networks: the validation split is the same for every seed of the fold (only the initial
+    # weights and batch order change)
     val_persons = inner_split(exp["person"][train], C.SEED + fold_n)
     is_val = np.isin(exp["person"], val_persons) & train
     is_fit = train & ~is_val
@@ -118,8 +119,8 @@ def run_fold(cycle: int, key: str, exp: dict, fold: str, stats: np.ndarray, log,
 
 
 def train_final_model(log) -> None:
-    """Modelo final do experimento A (ciclo 1): todos os dados, sem validação, nº de épocas =
-    mediana das melhores épocas dos 5 folds (a parada antecipada precisa de validação)."""
+    """Final model of experiment A (cycle 1): all data, no validation; epochs = median of the 5 folds' best epochs
+    (early stopping needs a validation set)."""
     exp = load_experiment("A", 1)
     epochs = [json.loads(str(np.load(result_path(1, "A", "lstm", f"Fold{k}"))["meta"]))["best_epoch"]
               for k in range(1, C.N_FOLDS + 1)]
@@ -135,8 +136,8 @@ def train_final_model(log) -> None:
 
 
 def leakage_controls(cycle: int, keys, log) -> None:
-    """Se algum resultado passa de 90% (por janela ou por vídeo), repete o treino com rótulos
-    sorteados por vídeo; sem vazamento o resultado cai para perto do acaso."""
+    """If any result exceeds 90% (per window or per video), retrain with random per-video labels;
+    without leakage the result drops to chance."""
     for key in keys:
         suspicious = []
         for model in ("regra_aprendida", "random_forest", *C.RNN_KINDS[cycle]):
@@ -154,6 +155,7 @@ def leakage_controls(cycle: int, keys, log) -> None:
 
 
 def main() -> None:
+    """CLI: run the experiments of a cycle, then the leakage controls and the report."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycle", type=int, default=1, choices=[1, 2, 3, 4, 5, 6])
     ap.add_argument("--exp", nargs="+", default=None)

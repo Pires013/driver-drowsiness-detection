@@ -1,17 +1,17 @@
-"""Demonstração ao vivo de sonolência: webcam ou arquivo de vídeo.
+"""Live drowsiness demo (webcam or video file).
 
-Rodar da raiz:
+Run from the project root:
     python -m demos.main_demo                       # webcam
-    python -m demos.main_demo --video caminho.mp4   # arquivo de vídeo
-Teclas: r = recalibra (trocar de visitante), q ou ESC = sai.
+    python -m demos.main_demo --video path.mp4      # video file
+Keys: r = recalibrate (new visitor), d = debug panel, q or ESC = quit.
 
-Camada 1 (estado): a LSTM analisa os últimos 60 s a cada 1 s e dá o nível de sonolência (0 a 100%).
-Camada 2 (eventos imediatos): olho fechado por >= 2 s, bocejos dos últimos 15 min e queda de cabeça
-(detection/events.py). Os dois juntos viram um nível: Normal, Atenção, Alerta ou Crítico
-(regras em detection/parameters.py). Ao lado, a regra simples (PERCLOS dos últimos 60 s).
+Layer 1 (state): the LSTM analyzes the last 60 s every second and outputs a drowsiness probability.
+Layer 2 (immediate events): closed eye >= 2 s, yawns in the last 15 min and head drop
+(detection/events.py). Both combine into a level: Normal, Attention, Alert or Critical
+(rules in detection/parameters.py). A simple PERCLOS rule (last 60 s) is shown next to it.
 
-O pré-processamento é o mesmo do treino (detection/preprocessing.py) e a configuração vem do JSON
-gravado com o modelo final (data/training/modelo_final/). Sem janela: --headless (usado nos testes).
+Preprocessing is shared with training (detection/preprocessing.py); the configuration comes from the
+JSON saved with the final model (data/training/modelo_final/). --headless runs without a window (tests).
 """
 import argparse
 import json
@@ -40,11 +40,8 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 NAN5 = [float("nan")] * P.N_MEASURES_BASE
 
 
-# ----------------------------------------------------------------------
-# Rede
-# ----------------------------------------------------------------------
 class Network:
-    """A rede final (LSTM ou GRU) com a normalização do treino; devolve a probabilidade de sonolento de uma janela."""
+    """Final network (LSTM or GRU) with the training normalization; returns the drowsy probability of a window."""
 
     def __init__(self, config_path: Path, checkpoint: Path | None = None):
         self.config = json.loads(Path(config_path).read_text(encoding="utf-8"))
@@ -63,10 +60,9 @@ class Network:
         return float(M.predict_proba(self.model, inputs)[0, self.positive])
 
 
-# ----------------------------------------------------------------------
-# Lógica da sessão (sem interface: serve também ao teste com vídeos)
-# ----------------------------------------------------------------------
 class LiveSession:
+    """Session logic without any UI, so it also serves tests with video files."""
+
     def __init__(self, network: Network, yawn_window_min: float = P.YAWN_COUNT_WINDOW_MIN):
         self.network = network
         self.yawn_window_min = yawn_window_min
@@ -76,7 +72,7 @@ class LiveSession:
         self.timeline: list[dict] = []
 
     def recalibrate(self, now: float) -> None:
-        """Recomeça do zero (outro visitante): referência, janela, eventos e nível."""
+        """Restart from scratch (new visitor): reference, window, events and level."""
         self.t0 = now
         self.buffer = LiveBuffer(self.calibration_s)
         self.tracker: EventTracker | None = None
@@ -90,16 +86,15 @@ class LiveSession:
         self.observed_steps = 0
         self.level = 0
         self.reason = ""
-        self.alert_source = ""            # origem do último Alerta: "eye" (olho fechado) ou "net" (só a rede)
+        self.alert_source = ""            # origin of the last Alert: "eye" (closed eye) or "net" (network only)
         self.last_update = -1e9
         self.ear_history: deque = deque()
-        self.frame_log: deque = deque()      # (t, rosto, válido, EAR bruto) dos últimos 60 s (painel de depuração)
+        self.frame_log: deque = deque()      # (t, face, valid, raw EAR) of the last 60 s (debug panel)
         self.status = ""
         self.last_features: dict | None = None
 
-    # --- um quadro -----------------------------------------------------
     def process(self, frame_bgr, now: float) -> tuple[float, object]:
-        """Detecta o rosto, atualiza buffer, eventos, rede e nível. Devolve (tempo da sessão, landmarks)."""
+        """Detect the face and update buffer, events, network and level. Returns (session time, landmarks)."""
         t = now - self.t0
         height, width = frame_bgr.shape[:2]
         if height > P.LIVE_DETECT_HEIGHT_PX:
@@ -129,7 +124,7 @@ class LiveSession:
                 self.tracker = EventTracker(ref_ear=ref[0], ref_mar=ref[1], ref_pitch=ref[2], ref_roll=ref[4],
                                           yawn_window_min=self.yawn_window_min)
             elif self.buffer.calibration_failed:
-                self.recalibrate(now)           # rosto não apareceu: recomeça
+                self.recalibrate(now)           # no face during calibration: start over
                 self.status = "Calibracao falhou (rosto nao encontrado). Recomecando."
             return t, landmarks
 
@@ -143,21 +138,21 @@ class LiveSession:
         while self.ear_history and self.ear_history[0][0] < t - P.EAR_PLOT_S:
             self.ear_history.popleft()
 
-        if t - self.last_update >= P.LIVE_UPDATE_S:           # a rede roda 1 vez por segundo
+        if t - self.last_update >= P.LIVE_UPDATE_S:           # the network runs once per second
             self.last_update = t
             window, self.observed_steps = self.buffer.window(t)
             if window is not None:
                 self.prob = self.network.predict(window)
                 self.perclos = float(M.window_stats(window)[0])
             elif t - self.buffer.calibration_s >= P.WINDOW_S:
-                self.prob = self.perclos = None                # janela com pouca observação
+                self.prob = self.perclos = None                # window with too few observations
         net_attention = self.gate_attention.update(t, self.prob)
         net_alert = self.gate_alert.update(t, self.prob)
         raw = decide_level(net_attention, net_alert, self.events)
         self.level = self.hold.update(t, raw)
         if raw >= 2:
             self.alert_source = "eye" if self.events.eye_closed_alert else "net"
-        if self.level > raw:        # o nível só desce depois de LEVEL_HOLD_S: mostra que está saindo
+        if self.level > raw:        # the level only drops after LEVEL_HOLD_S: show that it is leaving
             self.reason = f"saindo de {P.LEVEL_NAMES[self.level]} (aguarda {P.LEVEL_HOLD_S:g} s)"
         else:
             self.reason = level_reason(raw, self.prob, net_attention, net_alert, self.events,
@@ -165,7 +160,7 @@ class LiveSession:
         return t, landmarks
 
     def record(self, t: float, fps: float) -> None:
-        """Uma linha da linha do tempo por segundo de sessão."""
+        """Append one timeline row per second of session."""
         if not self.buffer.calibrated or (self.timeline and t - self.timeline[-1]["t"] < 1.0):
             return
         e = self.events
@@ -177,9 +172,6 @@ class LiveSession:
                               "fps": round(fps, 1)})
 
 
-# ----------------------------------------------------------------------
-# Tela
-# ----------------------------------------------------------------------
 def text(img, s, org, scale=0.6, color=(255, 255, 255), thick=1) -> None:
     cv2.putText(img, s, org, FONT, scale, color, thick, cv2.LINE_AA)
 
@@ -192,7 +184,7 @@ def bar(img, x, y, w, h, fraction, color, marker=None) -> None:
 
 
 def draw_ear_plot(img, session: LiveSession, x, y, w, h) -> None:
-    """Abertura do olho (EAR / referência) nos últimos 30 s, com a linha do limiar de olho fechando."""
+    """Eye opening (EAR / reference) over the last 30 s, with the eye-closing threshold line."""
     cv2.rectangle(img, (x, y), (x + w, y + h), (40, 40, 40), -1)
     top = 1.4
     limit_y = y + h - int(h * P.EAR_CLOSING_FACTOR / top)
@@ -217,7 +209,7 @@ def head_state(e: EventState) -> tuple[str, tuple]:
 
 
 def draw_debug(view, session: LiveSession) -> None:
-    """Painel TEMPORÁRIO de depuração (tecla d): valores brutos e relativos da pose, EAR e % de quadros válidos."""
+    """Temporary debug panel (key d): raw and relative pose, EAR and share of valid frames."""
     ref = session.buffer.ref
     f = session.last_features
     log = list(session.frame_log)
@@ -240,7 +232,7 @@ def draw_debug(view, session: LiveSession) -> None:
                      f"{'--' if session.perclos is None else f'{session.perclos:.0f}%'}")
         lines.append(f"passos observados na janela: {session.observed_steps}/{P.WINDOW_STEPS}")
     box_h, box_w = 18 * len(lines) + 8, min(view.shape[1], 520)
-    y0 = view.shape[0] - box_h - 16                      # caixa na parte de baixo, por cima do vídeo e do painel
+    y0 = view.shape[0] - box_h - 16                      # box at the bottom, over the video and the panel
     region = view[y0:y0 + box_h, :box_w]
     region[:] = (region * 0.3).astype(np.uint8)
     for i, line in enumerate(lines):
@@ -248,7 +240,7 @@ def draw_debug(view, session: LiveSession) -> None:
 
 
 def render(session: LiveSession, frame_bgr, landmarks, t: float, fps: float, debug: bool = False) -> np.ndarray:
-    """Quadro com os pontos do rosto e o painel (nível em cor, rede, PERCLOS, bocejos, cabeça, gráfico)."""
+    """Frame with face points plus the side panel (level, network, PERCLOS, yawns, head, plot)."""
     h, w = frame_bgr.shape[:2]
     view = cv2.resize(frame_bgr, (round(w * VIEW_H / h), VIEW_H))
     if landmarks is not None:
@@ -306,11 +298,8 @@ def render(session: LiveSession, frame_bgr, landmarks, t: float, fps: float, deb
     return canvas
 
 
-# ----------------------------------------------------------------------
-# Som
-# ----------------------------------------------------------------------
 class Beeper:
-    """Bipe nos níveis Alerta e Crítico (sounddevice); sem dispositivo de som, fica mudo."""
+    """Beeps on Alert and Critical levels (sounddevice); stays silent without a sound device."""
 
     def __init__(self, enabled: bool):
         self.sd = None
@@ -320,7 +309,7 @@ class Beeper:
             try:
                 import sounddevice
                 self.sd = sounddevice
-            except Exception as error:                   # sem biblioteca ou sem dispositivo
+            except Exception as error:                   # missing library or sound device
                 print(f"Sem som: {error}")
 
     def _wave(self, hz: int) -> np.ndarray:
@@ -328,14 +317,14 @@ class Beeper:
         return (0.4 * np.sin(2 * np.pi * hz * np.arange(n) / P.SOUND_SAMPLE_RATE)).astype(np.float32)
 
     def update(self, level: int, now: float, source: str = "eye") -> None:
-        """Crítico e Alerta por olho/queda: bipe periódico (1,5 s e 3 s). Alerta só pela rede (`source` = "net"):
-        um bipe ao entrar e depois a cada SOUND_NET_ALERT_REPEAT_S."""
+        """Critical and eye/drop Alert beep periodically (1.5 s and 3 s). Network-only Alert (`source` = "net")
+        beeps once on entry and then every SOUND_NET_ALERT_REPEAT_S."""
         if level < 2:
-            self.next_net_t = 0.0                 # ao voltar ao Alerta pela rede, o primeiro bipe é na hora
+            self.next_net_t = 0.0                 # on re-entering network Alert the first beep is immediate
         if self.sd is None or level < 2:
             return
         net_only = level == 2 and source == "net"
-        # relógios separados: o bipe lento da rede nunca atrasa o do olho fechado/queda nem o do Crítico
+        # separate clocks: the slow network beep never delays the closed-eye/drop or Critical beeps
         due = now >= (self.next_net_t if net_only else self.next_t)
         if not due:
             return
@@ -352,11 +341,8 @@ class Beeper:
             self.next_t = now + (P.SOUND_LEVEL_CRITICAL_REPEAT_S if critical else P.SOUND_LEVEL_ALERT_REPEAT_S)
 
 
-# ----------------------------------------------------------------------
-# Fonte de quadros
-# ----------------------------------------------------------------------
 def frames(args):
-    """(quadro, instante em s): webcam = relógio; arquivo = timestamp do vídeo (rotação da metadata)."""
+    """Yield (frame, time in s): webcam = wall clock; file = video timestamp (metadata rotation applied)."""
     if args.video:
         if not Path(args.video).is_file():
             raise SystemExit(f"vídeo não encontrado: {args.video}")
@@ -389,6 +375,7 @@ def frames(args):
 
 
 def run(args, session: LiveSession | None = None) -> LiveSession:
+    """Main loop: read frames, update the session, render and handle keys."""
     session = session or LiveSession(Network(args.config, args.checkpoint),
                                      P.FAIR_YAWN_COUNT_WINDOW_MIN if args.feira else P.YAWN_COUNT_WINDOW_MIN)
     beeper = Beeper(not args.no_sound and not args.headless)

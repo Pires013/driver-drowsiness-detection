@@ -1,15 +1,15 @@
-"""Prepara as janelas de treino a partir dos CSVs por frame de data/features/.
+"""Builds the training windows from the per-frame CSVs in data/features/.
 
-Por vídeo: frame inválido (detection/validity.py) vira falta -> reamostra para 10 Hz (média dos
-frames válidos de cada intervalo de 0,1 s; buraco de até 0,3 s é interpolado, maior fica como
-falta) -> mede cada canal em relação a uma referência -> janelas de 60 s com passo de 30 s.
+Per video: invalid frames become gaps -> resample to 10 Hz (mean of valid frames per 0.1 s step; gaps
+up to 0.3 s interpolated, longer ones stay missing) -> measure each channel against a reference ->
+60 s windows with a 30 s stride.
 
-Duas calibrações, gravadas em arquivos separados com as MESMAS janelas:
-  realistic : referência do vídeo = 1º minuto do próprio vídeo (que sai das janelas)
-  optimistic: referência da pessoa = vídeo alerta (0) dela (como no artigo do UTA-RLDD)
+Two calibrations, saved in separate files with the SAME windows:
+  realistic : reference = first minute of the video itself (excluded from the windows)
+  optimistic: reference = the person's alert (0) video (as in the UTA-RLDD paper)
 
-Uso (da raiz): python -m training.prepare_data [ciclo]   (padrão 1; os ciclos 2 e 3 acrescentam o canal de EAR mínimo)
-Saída: data/training[/ciclo2]/windows_<calibração>.npz e videos.csv
+Usage (from the root): python -m training.prepare_data [cycle]   (default 1; cycles 2+ add the minimum-EAR channel)
+Output: data/training[/ciclo2]/windows_<calibration>.npz and videos.csv
 """
 import numpy as np
 import pandas as pd
@@ -21,10 +21,9 @@ from training import config as C
 
 
 def resample_video(csv_path, n_measures: int = C.N_MEASURES) -> tuple[np.ndarray, dict]:
-    """(série a 10 Hz com shape (T, n_measures) e NaN nas faltas, metadados) de um CSV.
+    """Return (10 Hz series of shape (T, n_measures) with NaN gaps, metadata) for one CSV.
 
-    A reamostragem em si (média por 0,1 s, EAR mínimo no ciclo 2, interpolação de até 0,3 s) está em
-    detection/preprocessing.py, o mesmo código da demonstração ao vivo."""
+    The resampling itself lives in detection/preprocessing.py, the same code as the live demo."""
     data = pd.read_csv(csv_path, dtype={"participant": str})
     data = data.sort_values("timestamp_s").drop_duplicates("timestamp_s")
     valid = is_valid_frame(data["face_detected"].to_numpy(), data["yaw"].to_numpy(),
@@ -44,7 +43,7 @@ def resample_video(csv_path, n_measures: int = C.N_MEASURES) -> tuple[np.ndarray
 
 
 def windows_of(rel: np.ndarray) -> list[tuple[int, np.ndarray]]:
-    """Janelas (início em passos, tensor (60 s x 10 Hz, 5)) depois do minuto de calibração."""
+    """Windows (start step, 60 s x 10 Hz tensor) after the calibration minute."""
     out = []
     start = C.CALIBRATION_STEPS
     while start + C.WINDOW_STEPS <= len(rel):
@@ -56,6 +55,7 @@ def windows_of(rel: np.ndarray) -> list[tuple[int, np.ndarray]]:
 
 
 def main(cycle: int = 1) -> None:
+    """Resample every video and save the windows for each calibration."""
     out_dir = C.cycle_dir(cycle)
     out_dir.mkdir(parents=True, exist_ok=True)
     videos = {}
@@ -71,7 +71,7 @@ def main(cycle: int = 1) -> None:
     rows = []
     calibrations = ((C.CALIBRATION_REALISTIC,) if cycle in C.PART1_CYCLES
                     else (C.CALIBRATION_REALISTIC, C.CALIBRATION_OPTIMISTIC))
-    cal_steps = C.calibration_s(cycle) * C.RESAMPLE_HZ    # referência realista = 1º trecho do vídeo
+    cal_steps = C.calibration_s(cycle) * C.RESAMPLE_HZ    # realistic reference = first segment of the video
     for calibration in calibrations:
         X, y, person, fold, start = [], [], [], [], []
         for (p, label), (series, meta) in sorted(videos.items()):

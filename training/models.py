@@ -1,8 +1,8 @@
-"""Os três modelos: regra de PERCLOS, Random Forest sobre estatísticas da janela e LSTM pequena.
+"""The three models: PERCLOS rule, Random Forest on window statistics and a small LSTM (plus GRU).
 
-Todas as funções recebem as janelas já relativas à referência (shape (N, 600, 5), NaN = falta,
-canais: EAR relativo, MAR relativo, pitch, yaw e roll relativos). Nada aqui lê arquivo nem sabe o
-que é fold: quem decide quais janelas entram no treino é o run_experiments.
+Functions take windows already relative to the reference (shape (N, 600, 5), NaN = missing; channels:
+relative EAR, relative MAR, relative pitch, yaw, roll). Nothing here reads files or knows about folds:
+run_experiments decides which windows go into training.
 """
 import copy
 import time
@@ -19,24 +19,21 @@ from training import config as C
 STAT_NAMES = ["perclos_pct", "ear_medio", "fechamentos_longos", "piscadas", "bocejos", "pitch_std"]
 
 
-# ----------------------------------------------------------------------
-# Estatísticas da janela (usadas pela regra e pelo Random Forest)
-# ----------------------------------------------------------------------
 def run_lengths(mask: np.ndarray) -> np.ndarray:
-    """Tamanho (em passos) de cada sequência contínua de True."""
+    """Length (in steps) of each run of consecutive True values."""
     edges = np.diff(np.concatenate([[0], mask.astype(np.int8), [0]]))
     return np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)
 
 
 def window_stats(window: np.ndarray) -> np.ndarray:
-    """[PERCLOS %, EAR médio, fechamentos longos, piscadas, bocejos, desvio do pitch] de uma janela.
+    """Window statistics: [PERCLOS %, mean EAR, long closures, blinks, yawns, pitch std].
 
-    Mesmos limiares da análise de vídeo (EAR < 75% da referência = fechando; MAR > 1,6x a
-    referência por >= 1 s = bocejo), só que contados a 10 Hz. A falta quebra as sequências.
+    Same thresholds as the video analysis (EAR < 75% of reference = closing; MAR > 1.6x reference
+    for >= 1 s = yawn), counted at 10 Hz. Missing steps break runs.
     """
     ear, mar, pitch = window[:, 0], window[:, 1], window[:, 2]
     observed = np.isfinite(ear)
-    closed = ear < P.EAR_CLOSING_FACTOR                         # NaN < x é False
+    closed = ear < P.EAR_CLOSING_FACTOR                         # NaN < x is False
     lengths = run_lengths(closed)
     return np.array([
         P.PERCENT * closed[observed].mean(),
@@ -48,19 +45,17 @@ def window_stats(window: np.ndarray) -> np.ndarray:
 
 
 def all_stats(X: np.ndarray) -> np.ndarray:
+    """Window statistics for every window in X."""
     return np.stack([window_stats(w) for w in X])
 
 
-# ----------------------------------------------------------------------
-# Regra de PERCLOS
-# ----------------------------------------------------------------------
 def rule_predict(perclos: np.ndarray, thresholds: list[float]) -> np.ndarray:
-    """Classe = quantos limiares o PERCLOS ultrapassa (1 limiar: 0/1; 2 limiares: 0/1/2)."""
+    """Class = number of thresholds the PERCLOS exceeds (1 threshold: 0/1; 2 thresholds: 0/1/2)."""
     return sum((perclos > t).astype(int) for t in thresholds)
 
 
 def fit_rule(perclos: np.ndarray, y: np.ndarray, n_classes: int) -> list[float]:
-    """Limiares que maximizam a acurácia balanceada NO TREINO (1 limiar ou 2 para 3 classes)."""
+    """Thresholds maximizing balanced accuracy ON THE TRAINING SET (1 threshold, or 2 for 3 classes)."""
     candidates = np.unique(np.percentile(perclos, np.linspace(0, 100, 101)))
     if n_classes == 2:
         scores = [balanced_accuracy_score(y, rule_predict(perclos, [t])) for t in candidates]
@@ -74,21 +69,16 @@ def fit_rule(perclos: np.ndarray, y: np.ndarray, n_classes: int) -> list[float]:
     return best_pair
 
 
-# ----------------------------------------------------------------------
-# Random Forest
-# ----------------------------------------------------------------------
 def fit_forest(stats: np.ndarray, y: np.ndarray, seed: int) -> RandomForestClassifier:
+    """Random Forest on the window statistics."""
     forest = RandomForestClassifier(n_estimators=C.RF_TREES, min_samples_leaf=C.RF_MIN_LEAF,
                                     class_weight="balanced", n_jobs=-1, random_state=seed)
     return forest.fit(stats, y)
 
 
-# ----------------------------------------------------------------------
-# LSTM
-# ----------------------------------------------------------------------
 class SmallLSTM(nn.Module):
-    """1 camada de 64 unidades; a saída de todos os passos é promediada no tempo (a janela tem 600
-    passos e o rótulo vale para a janela inteira) e passa por dropout e uma camada linear."""
+    """One 64-unit layer; outputs of all steps are averaged over time (the window has 600 steps and
+    the label applies to the whole window), then pass through dropout and a linear layer."""
 
     def __init__(self, n_inputs: int, n_classes: int):
         super().__init__()
@@ -102,7 +92,7 @@ class SmallLSTM(nn.Module):
 
 
 class SmallGRU(nn.Module):
-    """Igual à SmallLSTM, com GRU no lugar (mesma configuração: 1 camada, 64 unidades, dropout 0,3)."""
+    """Same as SmallLSTM with a GRU instead (same configuration)."""
 
     def __init__(self, n_inputs: int, n_classes: int):
         super().__init__()
@@ -116,11 +106,12 @@ class SmallGRU(nn.Module):
 
 
 def make_rnn(kind: str, n_inputs: int, n_classes: int) -> nn.Module:
+    """Build the recurrent network: kind is "lstm" or "gru"."""
     return {"lstm": SmallLSTM, "gru": SmallGRU}[kind](n_inputs, n_classes)
 
 
 def fit_normalization(X: np.ndarray) -> dict:
-    """Média e desvio de cada medida SÓ nos passos observados das janelas de treino."""
+    """Mean and std of each measure over observed steps of the training windows ONLY."""
     flat = X.reshape(-1, X.shape[2])
     mean = np.nanmean(flat, axis=0)
     std = np.nanstd(flat, axis=0)
@@ -131,7 +122,7 @@ NORM_CLIP = 6.0
 
 
 def to_input(X: np.ndarray, norm: dict) -> torch.Tensor:
-    """(N, 600, 6): medidas normalizadas (falta = 0, limitadas a ±6 desvios) + canal de falta."""
+    """Network input: normalized measures (missing = 0, clipped to +-6 std) plus a missing-data channel."""
     missing = ~np.isfinite(X[:, :, 0])
     z = np.clip((X - norm["mean"]) / norm["std"], -NORM_CLIP, NORM_CLIP)
     z = np.nan_to_num(z, nan=0.0)
@@ -139,11 +130,13 @@ def to_input(X: np.ndarray, norm: dict) -> torch.Tensor:
 
 
 def class_weights(y: np.ndarray, n_classes: int) -> torch.Tensor:
+    """Inverse-frequency class weights for the loss."""
     counts = np.bincount(y, minlength=n_classes).astype(np.float32)
     return torch.from_numpy(len(y) / (n_classes * np.maximum(counts, 1)))
 
 
 def predict_proba(model: nn.Module, inputs: torch.Tensor, batch: int = 128) -> np.ndarray:
+    """Softmax probabilities, computed in batches."""
     model.eval()
     with torch.no_grad():
         return np.concatenate([torch.softmax(model(inputs[i:i + batch]), dim=1).numpy()
@@ -152,9 +145,9 @@ def predict_proba(model: nn.Module, inputs: torch.Tensor, batch: int = 128) -> n
 
 def train_lstm(X_train, y_train, n_classes, seed, X_val=None, y_val=None, fixed_epochs=None,
                log=print, kind: str = "lstm") -> tuple[nn.Module, dict, int]:
-    """Treina a LSTM. Com X_val: parada antecipada pela perda de validação (guarda o melhor
-    estado). Com fixed_epochs (modelo final, sem validação): treina esse número de épocas.
-    Devolve (modelo, normalização, melhor época)."""
+    """Train the network. With X_val: early stopping on validation loss (keeps the best state).
+    With fixed_epochs (final model, no validation): trains that many epochs.
+    Returns (model, normalization, best epoch)."""
     torch.set_num_threads(C.TORCH_THREADS)
     torch.manual_seed(seed)
     norm = fit_normalization(X_train)

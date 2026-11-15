@@ -1,11 +1,6 @@
-"""Quatro imagens de apoio para a apresentação, com frames do UTA-RLDD (participante 05; a cabeça
-inclinada usa o 35, que abaixa a cabeça mais que o 05).
+"""Four supporting images for the presentation, built from UTA-RLDD frames (participant 05; the head-down image uses 35).
 
-Rodar da raiz: python -m demos.imagens_apresentacao   (grava em data/apresentacao/, fora do git)
-  a) olho_aberto_fechado.png   b) boca_repouso_bocejo.png   c) cabeca_reta_inclinada.png
-  d) abertura_do_olho_participante05.png (EAR ao longo do vídeo alerta e do sonolento)
-Os frames são escolhidos pelos valores do CSV de features (sem ajuste manual).
-"""
+Frames are picked from the feature CSV values, with no manual tuning. Output goes to data/apresentacao/ (git-ignored)."""
 import cv2
 import matplotlib
 import numpy as np
@@ -41,7 +36,6 @@ def features(label: int, person: str = PERSON) -> pd.DataFrame:
 
 
 def grab(label: int, t: float, mesh, person: str = PERSON):
-    """(frame girado, landmarks) do instante t (s)."""
     cap, rotation = open_video(video_path(label, person))
     cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
     ok, frame = cap.read()
@@ -53,7 +47,6 @@ def grab(label: int, t: float, mesh, person: str = PERSON):
 
 
 def crop(frame, landmarks, indices, margin, size=(640, 420)):
-    """Recorte em torno dos pontos escolhidos, na proporção de `size`."""
     height, width = frame.shape[:2]
     pts = np.array(to_pixel_points(landmarks, indices, width, height))
     cx, cy = pts.mean(axis=0)
@@ -65,7 +58,7 @@ def crop(frame, landmarks, indices, margin, size=(640, 420)):
 
 
 def label(image, title, value, color):
-    """Faixa branca com título e valor (PIL, para desenhar acentos que o cv2.putText não tem)."""
+    # drawn with PIL because cv2.putText cannot render accents
     cv2.rectangle(image, (0, 0), (image.shape[1], 100), (255, 255, 255), -1)
     pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(pil)
@@ -83,7 +76,7 @@ def eyes_image(mesh):
     data = features(0)
     data = data[data.ok & (data.timestamp_s > 60)]
     opened = data.loc[data.ear_mean.sub(data.ear_mean.quantile(0.75)).abs().idxmin()]
-    closed = data.loc[data[data.ear_mean > 0.02].ear_mean.idxmin()]         # olho fechado, mas medido
+    closed = data.loc[data[data.ear_mean > 0.02].ear_mean.idxmin()]  # closed eye, but still measured (EAR > 0.02)
     tiles = []
     for row, title, color in ((opened, "Olho aberto", GREEN), (closed, "Olho fechado", RED)):
         frame, lm = grab(0, row.timestamp_s, mesh)
@@ -111,10 +104,10 @@ def mouth_image(mesh):
 
 
 def head_image(mesh):
-    data = features(10, HEAD_PERSON)         # o 05 quase não abaixa a cabeça; o 35 abaixa (pitch menor = para baixo)
+    data = features(10, HEAD_PERSON)  # participant 05 barely lowers the head; 35 does (lower pitch = looking down)
     data = data[data.ok & (data.timestamp_s > 60) & (data.yaw.abs() < 25) & (data.roll.abs() < 25)]
     straight = data.loc[data.pitch.sub(data.pitch.median()).abs().idxmin()]
-    down = data.loc[data.pitch.sub(data.pitch.quantile(0.01)).abs().idxmin()]    # 1º percentil: ignora pontos soltos
+    down = data.loc[data.pitch.sub(data.pitch.quantile(0.01)).abs().idxmin()]  # 1st percentile ignores stray points
     ref = straight.pitch
     tiles = []
     for row, title, color in ((straight, "Cabeça reta", GREEN), (down, "Cabeça inclinada para baixo", RED)):
@@ -133,7 +126,7 @@ def curve_image():
         d = features(label_)
         d = d[d.ok]
         minutes = d.timestamp_s / 60
-        smooth = d.ear_mean.rolling(300, min_periods=30, center=True).median()   # ~10 s
+        smooth = d.ear_mean.rolling(300, min_periods=30, center=True).median()
         ax.plot(minutes, smooth, color=color, lw=2.6, label=name)
     ax.set_xlabel("Tempo de vídeo (minutos)", fontsize=16)
     ax.set_ylabel("Abertura do olho (EAR)", fontsize=16)

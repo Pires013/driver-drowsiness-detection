@@ -1,9 +1,6 @@
-"""Métricas e relatório (data/training/relatorio.md) a partir das previsões em results/.
+"""Metrics and report (data/training/relatorio.md) built from the predictions in results/.
 
-A métrica principal é por VÍDEO (média das probabilidades das janelas do vídeo); a por janela é
-secundária, porque janelas vizinhas do mesmo vídeo se sobrepõem em 50%. Com várias sementes, cada
-métrica é calculada por semente e depois promediada.
-"""
+The main metric is per VIDEO; per window is secondary because neighboring windows overlap by 50%."""
 import json
 
 import numpy as np
@@ -22,7 +19,6 @@ CLASS_NAMES = {0: "alerta (0)", 5: "baixa vigilância (5)", 10: "sonolento (10)"
 
 
 def load_dataset(cycle: int, key: str) -> dict:
-    """Mesmo recorte de janelas do run_experiments (cópia curta para não depender dele)."""
     spec = C.experiments(cycle)[key]
     data = np.load(C.cycle_dir(cycle) / f"windows_{spec['calibration']}.npz")
     keep = np.isin(data["y"], spec["labels"]) & ~np.isin(data["person"], spec["exclude"])
@@ -33,7 +29,7 @@ def load_dataset(cycle: int, key: str) -> dict:
 
 def scores(y_true, y_pred, n_classes) -> dict:
     average = "binary" if n_classes == 2 else "macro"
-    # classe positiva = a última (sonolento nos experimentos binários)
+    # positive class = the last one (drowsy in the binary experiments)
     return {"acc": accuracy_score(y_true, y_pred), "bal_acc": balanced_accuracy_score(y_true, y_pred),
             "f1": f1_score(y_true, y_pred, average=average, zero_division=0),
             "precision": precision_score(y_true, y_pred, average=average, zero_division=0),
@@ -41,7 +37,6 @@ def scores(y_true, y_pred, n_classes) -> dict:
 
 
 def result_files(cycle: int, key: str, model: str, tag: str, k: int) -> list:
-    """Arquivos de um fold: um por semente nas redes do ciclo 2; um só nos demais casos."""
     folder = C.results_dir(cycle)
     if C.N_SEEDS[cycle] > 1 and model in C.RNN_KINDS[cycle]:
         return sorted(folder.glob(f"{key}{tag}_{model}_Fold{k}_s*.npz"))
@@ -50,11 +45,6 @@ def result_files(cycle: int, key: str, model: str, tag: str, k: int) -> list:
 
 
 def evaluate(cycle: int, key: str, model: str, tag: str = "", restrict_exclude=None) -> dict | None:
-    """Métricas por janela e por vídeo, fold a fold (médias das sementes); None se faltam resultados.
-
-    restrict_exclude: pessoas cujas janelas são ignoradas no teste (para comparar o ciclo 1 com o
-    ciclo 2 no mesmo conjunto de pessoas).
-    """
     data = load_dataset(cycle, key)
     n_classes = len(data["labels"])
     per_fold = [result_files(cycle, key, model, tag, k) for k in range(1, C.N_FOLDS + 1)]
@@ -218,8 +208,6 @@ def leakage_section(cycle: int) -> list[str]:
 
 
 def comparison_section() -> list[str]:
-    """Ciclo 1 x ciclo 2 (experimentos A e B). O ciclo 1 aparece completo (58 pessoas) e restrito às
-    55 pessoas do ciclo 2, para separar o efeito de trocar as pessoas do efeito das mudanças."""
     rows = []
     restrict = C.CYCLE2_EXCLUDE
     for key in ("A", "B"):
@@ -244,7 +232,6 @@ def comparison_section() -> list[str]:
 
 
 def rotation_section() -> list[str]:
-    """Por que o 26 (e o 45) voltaram: a rotação do vídeo estava certa; o problema é o roll."""
     return ["## Rotação do vídeo (26/5, 26/10, 45/0) e o roll do 26", "",
             "`rotation_deg` 180 (26/5, 45) e 270 (26/10) é aplicado do jeito certo em "
             "`pipeline/extract_features.py`: nos três vídeos o rosto sai em pé com a rotação da metadata "
@@ -259,9 +246,6 @@ def rotation_section() -> list[str]:
 
 
 def comparison3_section() -> list[str]:
-    """Ciclo 2 (55 pessoas) x ciclo 3 (57 pessoas, com o 26 e o 45), experimentos A e B. A linha
-    "ciclo 3 restrito" avalia os modelos do ciclo 3 só nas 55 pessoas do ciclo 2 (isola o efeito de
-    treinar com 26 e 45 do efeito de testar neles)."""
     rows = []
     for key in ("A", "B"):
         for model in MODEL_NAMES:

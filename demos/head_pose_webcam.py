@@ -1,8 +1,6 @@
-"""Demo de webcam da pose da cabeça (queda de cabeça). Rodar: python -m demos.head_pose_webcam (q sai).
+"""Webcam head-pose demo for head drops (q quits).
 
-Nos primeiros frames o usuário olha reto para a frente: a média do pitch e da altura do queixo
-vira a referência, e a queda é medida em relação a ela.
-"""
+The mean pitch and chin height of the first frames (looking straight ahead) are the reference for the drop."""
 from detection import parameters as P
 from detection.calibration import chin_drop_threshold, pitch_drop_threshold, reference_from_first_frames
 from detection.drawing import draw_points, put_text
@@ -21,7 +19,6 @@ def new_state() -> dict:
 
 
 def calibrate(state: dict, pitch: float, chin_y: int) -> None:
-    """Acumula pitch e queixo neutros e, ao juntar frames suficientes, fixa os dois limiares."""
     state["pitch_values"].append(pitch)
     state["chin_values"].append(chin_y)
     if len(state["pitch_values"]) >= P.CALIBRATION_FRAMES:
@@ -34,7 +31,6 @@ def calibrate(state: dict, pitch: float, chin_y: int) -> None:
 
 
 def update_drop_frames(state: dict, pitch: float, chin_y: int) -> None:
-    """Conta frames seguidos com a cabeça caída (pitch baixo OU queixo baixo)."""
     head_dropping = pitch < state["pitch_threshold"] or chin_y > state["chin_threshold"]
     state["drop_frames"] = state["drop_frames"] + 1 if head_dropping else 0
 

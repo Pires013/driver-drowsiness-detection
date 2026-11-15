@@ -1,1 +1,1 @@
-"""Biblioteca compartilhada: cálculo (EAR, MAR, pose da cabeça), parâmetros, desenho e captura."""
+"""Shared library: EAR, MAR, head pose, parameters, drawing and webcam capture."""

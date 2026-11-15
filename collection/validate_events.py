@@ -1,18 +1,6 @@
-"""Compara os eventos marcados à mão (collection/validation_recording.py) com o que os detectores de
-bocejo e de queda de cabeça (detection/events.py) encontram nas mesmas medidas.
+"""Compares hand-marked events (collection/validation_recording.py) with the yawn and head-drop detectors.
 
-Rodar da raiz: python -m collection.validate_events data/own/<sessão> [--calibration-start S]
-
-Os detectores usam a calibração de 10 s do começo da gravação, igual ao demo: se a calibração falha
-(poucos quadros válidos), recomeça. As marcas dos 10 s da calibração ficam fora da conta. Uma detecção
-casa com uma marca do mesmo tipo se os intervalos se tocam, com tolerância de 2 s (a tecla é uma marca
-no instante exato; o bocejo ou a queda é um intervalo). Por tipo: marcados, detectados, acertos (marca com
-detecção), perdas (marca sem detecção), alarmes falsos (detecção sem marca), precisão, recall e F1.
-Para "celular" e "painel/retrovisor" não há detector: conta quantas quedas de cabeça detectadas caem
-nessas marcas (alarme falso de queda, pois é o olhar para baixo ou para o lado do dia a dia). Também
-conta as quedas em que o rosto foi perdido em seguida (a regra que leva ao nível Crítico sem esperar a rede).
-Sessões antigas (uma tecla ligava e desligava o evento) têm marcas longas; o relatório avisa.
-"""
+A detection matches a mark of the same type if the intervals touch within a 2 s tolerance; reports precision, recall and F1."""
 import argparse
 from pathlib import Path
 
@@ -25,12 +13,10 @@ from detection.preprocessing import LiveBuffer
 from detection.validity import is_valid_frame
 
 DETECTABLE = {"b": "yawns", "h": "head_drops"}
-LONG_MARK_S = 20.0                      # marca mais longa que isso: sessão antiga (tecla ligava/desligava)
+LONG_MARK_S = 20.0  # a longer mark means an old session (one key toggled the event on/off)
 
 
 def detect(frames: pd.DataFrame, calibration_start: float = 0.0) -> dict[str, list[tuple[float, float]]]:
-    """Intervalos de bocejo, de queda de cabeça e de "rosto perdido logo após queda" nas medidas gravadas
-    (mesmo código da demonstração, inclusive recomeçar a calibração quando ela falha)."""
     face = frames["face_detected"].to_numpy() == P.FACE_FOUND
     valid = is_valid_frame(frames["face_detected"].to_numpy(), frames["yaw"].to_numpy(),
                            frames["roll"].to_numpy(), frames["ear_left"].to_numpy(),
@@ -38,7 +24,7 @@ def detect(frames: pd.DataFrame, calibration_start: float = 0.0) -> dict[str, li
     values = frames[P.MEASURE_NAMES].to_numpy()
     valid &= np.isfinite(values).all(axis=1)
     times = frames["t"].to_numpy()
-    t0 = max(times[0], calibration_start)           # a calibração de 10 s começa aqui (padrão: início da gravação)
+    t0 = max(times[0], calibration_start)  # the 10 s calibration starts here (default: start of the recording)
     buffer, tracker = LiveBuffer(P.LIVE_CALIBRATION_S), None
     restarts, lost_after_drop, open_start = 0, [], None
     critical, crit_start = [], None
@@ -54,7 +40,7 @@ def detect(frames: pd.DataFrame, calibration_start: float = 0.0) -> dict[str, li
                 buffer, t0, restarts = LiveBuffer(P.LIVE_CALIBRATION_S), t, restarts + 1
             continue
         state = tracker.update(t, bool(face[i]), bool(valid[i]), values[i, 0], values[i, 1], values[i, 2], values[i, 4])
-        is_critical = decide_level(False, False, state) == 3         # sem a rede: só as regras de olho e cabeça
+        is_critical = decide_level(False, False, state) == 3  # no network: only the eye and head rules
         if is_critical and crit_start is None:
             crit_start = t
         elif not is_critical and crit_start is not None:

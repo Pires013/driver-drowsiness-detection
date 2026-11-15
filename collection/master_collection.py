@@ -1,12 +1,6 @@
-"""Coleta própria pela webcam: grava blocos rotulados de 3 s com EAR, MAR, yaw e pitch por frame.
+"""Own webcam data collection: records labeled 3 s blocks of per-frame EAR, MAR, yaw and pitch.
 
-Rodar da raiz: python -m collection.master_collection
-Teclas: 0 = alerta, 1 = fadiga, s = pausar, ESC ou q = sair.
-
-Cada execução é uma sessão com seu próprio CSV em collection/sessions/. Assim PC e notebook não
-geram conflito no git; depois é só concatenar os arquivos. (session_id, block_id) identifica
-o bloco no dataset todo.
-"""
+Each run is a session with its own CSV in collection/sessions/, so machines never conflict in git."""
 import csv
 import time
 import winsound
@@ -24,14 +18,12 @@ INSTRUCTIONS = "[INFO] Pressione '0' para Alerta, '1' para Fadiga, 's' para paus
 
 
 def ask_session_info() -> tuple[str, str]:
-    """Pessoa e cenário da sessão (Enter aceita o padrão)."""
     person = input("Pessoa (ex: eu, mae) [eu]: ").strip() or P.DEFAULT_PERSON
     scenario = input("Cenário/iluminação (ex: noite-luz-quarto, dia-janela) [padrao]: ").strip() or P.DEFAULT_SCENARIO
     return person, scenario
 
 
 def open_session_csv(session_id: str):
-    """Abre o CSV da sessão com o cabeçalho; devolve (arquivo, writer, caminho)."""
     P.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     path = P.SESSIONS_DIR / f"session_{session_id}.csv"
     csv_file = open(path, mode="w", newline="", encoding="utf-8")
@@ -46,7 +38,6 @@ def new_state() -> dict:
 
 
 def start_recording(state: dict, label: int, message: str, beep: tuple[int, int]) -> None:
-    """Começa a gravar um novo bloco com o rótulo escolhido."""
     state.update(recording=True, label=label, block_frames=[], block_start=time.time())
     print(message)
     winsound.Beep(*beep)
@@ -63,7 +54,6 @@ def handle_key(state: dict, key: int) -> None:
 
 
 def save_block(state: dict, session_fields: list, csv_file, writer) -> None:
-    """Grava TODOS os frames do bloco (sem média) com um id de bloco novo."""
     state["block_id"] += 1
     for index, (t, ear, mar, yaw, pitch) in enumerate(state["block_frames"]):
         writer.writerow([*session_fields, state["block_id"], index, f"{t:.3f}", f"{ear:.4f}",
@@ -73,7 +63,6 @@ def save_block(state: dict, session_fields: list, csv_file, writer) -> None:
 
 
 def record_frame(image, state: dict, features: dict, session_fields: list, csv_file, writer) -> None:
-    """Acumula o frame no bloco; ao completar a duração, grava o bloco e apita."""
     elapsed = time.time() - state["block_start"]
     state["block_frames"].append(
         (elapsed, features["ear_mean"], features["mar"], features["yaw"], features["pitch"]))

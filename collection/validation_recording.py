@@ -1,17 +1,16 @@
-"""Grava a webcam (ou um vídeo) com as medidas por frame e eventos marcados à mão, para validar os
-detectores de bocejo e de queda de cabeça (collection/validate_events.py compara os dois).
+"""Records the webcam (or a video) with per-frame measures and hand-marked events, to validate the
+yawn and head-drop detectors (collection/validate_events.py compares the two).
 
-Rodar da raiz:
+Run from the project root:
     python -m collection.validation_recording                 # webcam
     python -m collection.validation_recording --video x.mp4 --simulate "b:23-25,h:60-64" --headless
-Teclas (UMA MARCA POR TECLA APERTADA, com o instante exato; aperte a cada ação, não uma vez por bloco):
-b = bocejo, h = queda de cabeça, c = olhar o celular, p = olhar painel ou retrovisor, n = normal,
-q ou ESC = sai. Aperte logo depois (ou durante) a ação.
+Keys (ONE MARK PER KEY PRESS, at the exact instant; press at every action, not once per block):
+b = yawn, h = head drop, c = looking at the phone, p = looking at the dashboard/mirror, n = normal,
+q or ESC = quit.
 
-Saída em data/own/<sessão>/ (fora do git): video.mp4, frames.csv (medidas por frame e eventos
-da tecla apertada naquele quadro, vazia nos demais) e events.csv (uma linha por tecla: tipo, início = fim
-= instante da tecla, em segundos). `--simulate` injeta marcas por tempo ("b:24" ou "b:23-25", que marca
-o fim), para testar sem webcam (num vídeo do dataset).
+Output in data/own/<session>/ (git-ignored): video.mp4, frames.csv (per-frame measures plus the key
+pressed on that frame) and events.csv (one row per key press: type, start = end = key time in seconds).
+--simulate injects marks by time ("b:24" or "b:23-25", which marks the end) to test without a webcam.
 """
 import argparse
 import csv
@@ -30,7 +29,7 @@ NAN = float("nan")
 
 
 def parse_simulation(spec: str | None) -> list[tuple[str, float]]:
-    """'b:24,h:60-64' -> [('b', 24.0), ('h', 64.0)] (um intervalo marca o instante do fim)."""
+    """Parse 'b:24,h:60-64' into [('b', 24.0), ('h', 64.0)]; a span marks its end instant."""
     marks = []
     for part in (spec or "").split(","):
         if part.strip():
@@ -40,10 +39,10 @@ def parse_simulation(spec: str | None) -> list[tuple[str, float]]:
 
 
 class EventMarker:
-    """Guarda uma marca (tipo, instante) por tecla apertada."""
+    """Stores one mark (type, instant) per key press."""
 
     def __init__(self):
-        self.intervals: list[tuple[str, float, float]] = []     # (tipo, instante, instante)
+        self.intervals: list[tuple[str, float, float]] = []     # (type, start, end); start = end
         self.last: tuple[str, float] | None = None
 
     def press(self, kind: str, t: float) -> None:
@@ -52,7 +51,7 @@ class EventMarker:
 
 
 def frames_from(args):
-    """(quadro, instante em s) da webcam (relógio) ou do arquivo (timestamp do vídeo, com rotação)."""
+    """Yield (frame, time in s) from the webcam (wall clock) or a file (video timestamp, rotation applied)."""
     if args.video:
         if not Path(args.video).is_file():
             raise SystemExit(f"vídeo não encontrado: {args.video}")
@@ -83,6 +82,7 @@ def frames_from(args):
 
 
 def record(args) -> Path:
+    """Record frames, measures and marks into a session folder; returns the folder."""
     session = args.session or datetime.now().strftime("%Y%m%d_%H%M%S")
     out = Path(args.out) / session
     out.mkdir(parents=True, exist_ok=True)
@@ -129,7 +129,7 @@ def record(args) -> Path:
                     break
                 if key in P.VALIDATION_KEYS:
                     marker.press(P.VALIDATION_KEYS[key], t)
-                    typed.append(P.VALIDATION_KEYS[key])           # entra na coluna "marcas" do próximo quadro
+                    typed.append(P.VALIDATION_KEYS[key])           # goes into the "marcas" column of the next frame
     if writer is not None:
         writer.release()
     if not args.headless:

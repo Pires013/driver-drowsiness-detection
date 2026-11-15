@@ -1,8 +1,6 @@
-"""Demo de webcam do EAR com calibração dinâmica. Rodar: python -m demos.ear_webcam (q sai).
+"""Webcam EAR demo with dynamic calibration (q quits).
 
-Nos primeiros frames o usuário olha para a câmera de olhos abertos: a média vira o EAR de
-referência e o limiar de "olho fechando" é uma fração dele.
-"""
+The mean EAR of the first frames (eyes open) is the reference; the eye-closing threshold is a fraction of it."""
 from detection import parameters as P
 from detection.calibration import ear_threshold, reference_from_first_frames
 from detection.drawing import draw_contours, draw_points, draw_tesselation, put_text
@@ -20,7 +18,6 @@ def new_state() -> dict:
 
 
 def calibrate(state: dict, ear_mean: float) -> None:
-    """Acumula o EAR de referência e, ao juntar frames suficientes, fixa o limiar."""
     state["calibration_values"].append(ear_mean)
     if len(state["calibration_values"]) >= P.CALIBRATION_FRAMES:
         neutral = reference_from_first_frames(state["calibration_values"])
@@ -30,7 +27,6 @@ def calibrate(state: dict, ear_mean: float) -> None:
 
 
 def update_closed_frames(state: dict, ear_mean: float) -> None:
-    """Conta frames seguidos abaixo do limiar; uma piscada rápida zera o contador."""
     state["closed_frames"] = state["closed_frames"] + 1 if ear_mean < state["threshold"] else 0
 
 

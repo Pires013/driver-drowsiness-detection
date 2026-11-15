@@ -1,4 +1,4 @@
-"""Demo mínimo: malha facial do MediaPipe na webcam, com FPS. Rodar: python -m demos.face_mesh_basic (q sai)."""
+"""Minimal demo: MediaPipe face mesh on the webcam with FPS (q quits)."""
 from detection import parameters as P
 from detection.drawing import draw_contours, draw_tesselation, put_text
 from detection.landmarks import create_face_mesh, detect_face

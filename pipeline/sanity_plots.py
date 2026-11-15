@@ -1,4 +1,4 @@
-"""Gráficos do sanity_check: comparação por participante, EAR no tempo e distribuição do MAR."""
+"""Sanity-check plots: per-participant comparison, EAR over time and MAR distribution."""
 from pathlib import Path
 
 import matplotlib
@@ -11,7 +11,6 @@ from detection import parameters as P
 
 
 def style_axis(ax, title: str, ylabel: str = "") -> None:
-    """Estilo recessivo: sem moldura, grade só horizontal e discreta."""
     ax.set_title(title, loc="left", fontsize=P.TITLE_FONT_SIZE, color=P.INK_COLOR)
     ax.set_ylabel(ylabel, fontsize=P.LABEL_FONT_SIZE, color=P.INK_COLOR)
     ax.tick_params(labelsize=P.LABEL_FONT_SIZE, colors=P.INK_COLOR, length=0)
@@ -23,7 +22,6 @@ def style_axis(ax, title: str, ylabel: str = "") -> None:
 
 
 def plot_comparison(table: pd.DataFrame, out_dir: Path) -> None:
-    """Barras agrupadas (rótulos 0, 5, 10) por participante, uma janela por métrica."""
     metrics = [("mean_ear", "EAR médio", ""), ("perclos_pct", "PERCLOS", "% dos frames"),
                ("blinks_per_min", "Piscadas por minuto", "piscadas/min"),
                ("yawns", "Bocejos", "contagem (>=1 s)"), ("mean_pitch", "Pitch médio", "graus"),
@@ -39,7 +37,7 @@ def plot_comparison(table: pd.DataFrame, out_dir: Path) -> None:
                    color=P.LABEL_COLORS[label], label=P.LABEL_NAMES[label])
         ax.set_xticks(range(len(participants)), [f"P{p}" for p in participants])
         style_axis(ax, title, ylabel)
-        if column != "mean_pitch":        # contagens e porcentagens nunca são negativas
+        if column != "mean_pitch":  # counts and percentages are never negative
             ax.set_ylim(bottom=0)
     axes[0, 0].legend(fontsize=P.LABEL_FONT_SIZE, frameon=False, loc="lower left")
     fig.suptitle("Alerta vs sonolento por participante (limiares relativos ao próprio vídeo)",
@@ -49,7 +47,6 @@ def plot_comparison(table: pd.DataFrame, out_dir: Path) -> None:
 
 
 def plot_ear_timeseries(data: dict, out_dir: Path) -> None:
-    """EAR médio ao longo do tempo, um painel por participante, uma linha por rótulo."""
     participants = sorted({key[0] for key in data})
     fig, axes = plt.subplots(len(participants), 1, figsize=(P.TIMESERIES_WIDTH, P.TIMESERIES_ROW_HEIGHT * len(participants)),
                              sharey=True, constrained_layout=True, squeeze=False)
@@ -70,7 +67,6 @@ def plot_ear_timeseries(data: dict, out_dir: Path) -> None:
 
 
 def plot_mar_distribution(table: pd.DataFrame, out_dir: Path) -> None:
-    """Percentis do MAR por vídeo, com o limiar de bocejo relativo de cada um."""
     table = table.sort_values(["participant", "label"]).reset_index(drop=True)
     fig, ax = plt.subplots(figsize=(P.MAR_PLOT_WIDTH, P.MAR_PLOT_ROW_HEIGHT * len(table) + P.MAR_PLOT_PADDING),
                            constrained_layout=True)

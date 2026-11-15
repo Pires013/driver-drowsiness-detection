@@ -34,11 +34,7 @@ ROTATIONS = {
 }
 
 
-# ----------------------------------------------------------------------
-# Caminho, abertura e leitura do vídeo
-# ----------------------------------------------------------------------
 def parse_video_path(video: Path, input_dir: Path) -> tuple[str, str, int]:
-    """<input>/<Fold1_part1>/<01>/<10.MOV> -> (fold='Fold1', participant='01', label=10)."""
     parts = video.relative_to(input_dir).parts
     if len(parts) != 3:
         raise ValueError(f"Estrutura inesperada (esperava fold/participante/arquivo): {video}")
@@ -52,27 +48,21 @@ def parse_video_path(video: Path, input_dir: Path) -> tuple[str, str, int]:
 
 
 def open_video(path: Path) -> tuple[cv2.VideoCapture, int]:
-    """Abre o vídeo e devolve (cap, graus_de_rotacao).
-
-    Desligamos a rotação automática do OpenCV para ter comportamento determinístico (nos testes
-    ele NÃO aplicou a rotação nestes vídeos) e aplicamos nós mesmos a rotação da metadata.
-    Verificado visualmente: meta=90 -> ROTATE_90_CLOCKWISE deixa o rosto em pé.
-    """
     cap = cv2.VideoCapture(str(path), cv2.CAP_FFMPEG)
     if not cap.isOpened():
         cap = cv2.VideoCapture(str(path))
+    # OpenCV auto-rotation is off for determinism (it did not apply it on these videos); the metadata rotation is applied manually
     cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 0)
     degrees = int(cap.get(cv2.CAP_PROP_ORIENTATION_META)) % 360
     return cap, degrees
 
 
 def iter_frames(cap: cv2.VideoCapture, rotation_deg: int, max_seconds: float | None) -> Iterator:
-    """(timestamp_s, frame) de cada frame, já rotacionado, até o fim do vídeo ou de max_seconds."""
     while True:
         success, frame = cap.read()
         if not success:
             return
-        # Timestamp REAL do container (não frame_idx / fps): o fps varia entre vídeos
+        # REAL container timestamp (not frame_idx / fps): fps varies between videos
         timestamp_s = cap.get(cv2.CAP_PROP_POS_MSEC) / P.MS_PER_SECOND
         if max_seconds and timestamp_s >= max_seconds:
             return
@@ -82,19 +72,14 @@ def iter_frames(cap: cv2.VideoCapture, rotation_deg: int, max_seconds: float | N
 
 
 def estimate_total_frames(cap: cv2.VideoCapture, nominal_fps: float, max_seconds: float | None) -> int:
-    """Total de frames para a barra de progresso (aproximado quando há max_seconds)."""
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if max_seconds:
         total = min(total, int(max_seconds * nominal_fps) + 1)
     return total
 
 
-# ----------------------------------------------------------------------
-# Linha do CSV e frame de depuração
-# ----------------------------------------------------------------------
 def csv_row(participant: str, label: int, fold: str, timestamp_s: float, frame_idx: int,
             features: dict | None) -> list:
-    """Linha do CSV. Frame sem rosto vira linha com NaN, nunca é pulado."""
     if features is None:
         face_detected, values = P.FACE_NOT_FOUND, [math.nan] * len(P.FEATURE_COLUMNS)
     else:
@@ -105,7 +90,6 @@ def csv_row(participant: str, label: int, fold: str, timestamp_s: float, frame_i
 
 def save_debug_frame(frame, face_landmarks: FaceLandmarks, features: dict,
                      timestamp_s: float, destination: Path) -> None:
-    """Salva um frame com malha, pontos de EAR/MAR e valores, para conferir a extração a olho."""
     image = frame.copy()
     draw_tesselation(image, face_landmarks)
     draw_contours(image, face_landmarks)
@@ -129,12 +113,8 @@ def save_debug_frame(frame, face_landmarks: FaceLandmarks, features: dict,
     cv2.imwrite(str(destination), image)
 
 
-# ----------------------------------------------------------------------
-# Processamento de um vídeo
-# ----------------------------------------------------------------------
 def process_video(video: Path, input_dir: Path, csv_path: Path, face_mesh,
                   max_seconds: float | None, debug_dir: Path | None, debug_at_s: float) -> dict:
-    """Extrai as features de um vídeo para csv_path e devolve o resumo para o log."""
     fold, participant, label = parse_video_path(video, input_dir)
     cap, rotation = open_video(video)
     if not cap.isOpened():
@@ -175,7 +155,7 @@ def process_video(video: Path, input_dir: Path, csv_path: Path, face_mesh,
             frame_count += 1
             progress.update(1)
     cap.release()
-    os.replace(tmp_path, csv_path)   # só vira "pronto" quando o vídeo terminou inteiro
+    os.replace(tmp_path, csv_path)  # only becomes "done" once the whole video was processed
 
     elapsed = time.perf_counter() - started
     return {
@@ -188,9 +168,6 @@ def process_video(video: Path, input_dir: Path, csv_path: Path, face_mesh,
     }
 
 
-# ----------------------------------------------------------------------
-# Linha de comando
-# ----------------------------------------------------------------------
 def list_videos(input_dir: Path, only: list[str] | None) -> list[Path]:
     if only:
         videos = []
@@ -230,8 +207,7 @@ def append_log(log_path: Path, info: dict, write_header: bool) -> None:
 
 def main() -> None:
     args = parse_args()
-    # Teste parcial NUNCA escreve no diretório final, senão o "pular se já existe"
-    # trataria um CSV de 60 s como se fosse o vídeo completo.
+    # partial runs NEVER write to the final dir, or "skip if exists" would treat a 60 s CSV as a full video
     if args.output is None:
         args.output = P.FEATURES_TEST_DIR if args.max_seconds else P.FEATURES_DIR
     if args.debug_frame_dir:
@@ -254,8 +230,7 @@ def main() -> None:
             print(f"[{i}/{len(videos)}] pulando (CSV já existe): {participant}/{video.name}")
             continue
         print(f"[{i}/{len(videos)}] {participant}/{video.name}")
-        # Zera o rastreamento (tracking): ele não deve vazar do último frame de um vídeo
-        # para o primeiro do seguinte.
+        # reset tracking so it does not leak from the last frame of one video into the first of the next
         face_mesh.reset()
         info = process_video(video, args.input, csv_path, face_mesh, args.max_seconds,
                              args.debug_frame_dir, args.debug_frame_at)

@@ -1,13 +1,6 @@
-"""Parte 1: duração da calibração (5, 10 e 60 s), tabela de métricas e modelo final (calibração de 10 s).
+"""Part 1: calibration length (5, 10 and 60 s), metrics tables and the final model (10 s calibration).
 
-Uso (da raiz, depois de rodar prepare_data e run_experiments para os ciclos 4, 5 e 6):
-    python -m training.parte1 tabelas    # metricas_parte1.csv e relatorio_parte1.md
-    python -m training.parte1 final      # modelo final com calibração de 10 s + JSON de configuração
-
-Os "ciclos" 4, 5 e 6 são o experimento A (0 contra 10, calibração realista) com a referência tirada
-dos primeiros 5, 10 e 60 s do vídeo; as janelas começam depois do 1º minuto nos três (training/config.py).
-Classe positiva = sonolento (10).
-"""
+Usage: python -m training.parte1 tabelas|final (after prepare_data and run_experiments for cycles 4, 5 and 6)."""
 import json
 import sys
 
@@ -23,7 +16,7 @@ METRIC_TITLES = {"acc": "Acurácia", "precision": "Precisão", "recall": "Recall
                  "bal_acc": "Acurácia balanceada"}
 METRIC_ORDER = ["acc", "precision", "recall", "f1", "bal_acc"]
 MODELS = ("regra_aprendida", "lstm")
-# (rótulo, ciclo, experimento)
+# (label, cycle, experiment)
 SOURCES = [("Realista, calibração de 5 s", 4, "A"), ("Realista, calibração de 10 s", 5, "A"),
            ("Realista, calibração de 60 s", 6, "A"),
            ("Otimista (vídeo alerta), ciclo 3, sem o 44", 3, "B"),
@@ -96,9 +89,6 @@ def table_markdown(rows: list[dict]) -> list[str]:
 
 
 def train_final(log=print) -> None:
-    """Modelo final: calibração de 10 s, todos os participantes menos o 44, sem validação, nº de
-    épocas = mediana das melhores épocas dos folds da calibração de 10 s (a parada antecipada precisa
-    de validação, que aqui não existe)."""
     import torch
     from training.run_experiments import load_experiment, result_path
 
@@ -157,7 +147,6 @@ PRESENTATION_METRICS = ["acc", "precision", "recall", "f1"]
 
 
 def presentation_table() -> str:
-    """Tabela da apresentação: calibração de 10 s, por vídeo, classe positiva = sonolento."""
     rows = [("Regra com limiar aprendido (calibração de 10 s)", 5, "regra_aprendida"),
             ("Rede LSTM (calibração de 10 s)", 5, "lstm"),
             ("Rede LSTM, calibração otimista (referência: vídeo alerta da própria pessoa)", 3, "lstm")]
